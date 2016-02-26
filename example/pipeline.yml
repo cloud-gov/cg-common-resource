@@ -1,0 +1,95 @@
+---
+jobs:
+- name: deploy-something
+  plan:
+  - aggregate:
+    - get: pipeline-tasks
+    - get: something-config
+      trigger: true
+    - get: common-prod
+    - get: a-release
+    - get: a-stemcell
+  - task: manifest
+    file: pipeline-tasks/spiff-merge.yml
+    config:
+      inputs:
+        - name: pipeline-tasks
+        - name: something-config
+        - name: common-prod
+      params:
+        OUTPUT_FILE: spiff-merge/manifest.yml
+        SOURCE_FILE: something-config/something.yml
+        MERGE_FILES: common-prod/secrets.yml
+  - put: something-deployment
+    params:
+      cert: common-prod/boshCA.crt
+      manifest: spiff-merge/manifest.yml
+      releases:
+        - a-release/*.tgz
+      stemcells:
+        - a-stemcell/*.tgz
+    on_failure:
+      put: slack
+      params:
+        text: |
+          :x: FAILED to deploy monitoring on production
+          <https://ci.cloud.gov/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+        channel: {{slack-channel}}
+        username: {{slack-username}}
+        icon_url: {{slack-icon-url}}
+    on_success:
+      put: slack
+      params:
+        text: |
+          :white_check_mark: Successfully deployed monitoring on production
+          <https://ci.cloud.gov/pipelines/$BUILD_PIPELINE_NAME/jobs/$BUILD_JOB_NAME/builds/$BUILD_NAME|View build details>
+        channel: {{slack-channel}}
+        username: {{slack-username}}
+        icon_url: {{slack-icon-url}}
+
+resources:
+- name: common
+  type: cg-common
+  source:
+    bucket_name: {{private-bucket}}
+    access_key_id: {{private-access-key-id}}
+    secret_access_key: {{private-secret-access-key}}
+    secrets_file: something.yml
+    secrets_passphrase: {{private-passphrase}}
+    bosh_cert: bosh.pem
+
+- name: a-release
+  type: bosh-io-release
+  source:
+    repository: foobar
+
+- name: something-config
+  type: git
+  source:
+    uri: a-url
+    branch: master
+
+- name: a-stemcell
+  type: bosh-io-stemcell
+  source:
+    name: stemcell
+
+- name: a-deployment
+  type: bosh-deployment
+  source:
+    target: {{deployment-bosh-target}}
+    username: {{deployment-bosh-username}}
+    password: {{deployment-bosh-password}}
+    deployment: {{deployment-bosh-deployment}}
+    ignore_ssl: false
+
+- name: pipeline-tasks
+  type: git
+  source:
+    uri: {{pipeline-tasks-git-url}}
+    branch: {{pipeline-tasks-git-branch}}
+
+- name: slack
+  type: slack-notification
+  source:
+    url: {{slack-webhook-url}}
