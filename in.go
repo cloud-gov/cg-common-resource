@@ -7,6 +7,9 @@ import (
 	"io/ioutil"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/goamz/goamz/aws"
 	"github.com/goamz/goamz/s3"
@@ -27,11 +30,12 @@ type Source struct {
 	BoshCert          string `json:"bosh_cert"`
 }
 
+type Version struct {
+	Ref string `json:"ref"`
+}
 type Input struct {
 	Source  Source
-	Version struct {
-		Ref string `json:"ref"`
-	} `json:"version"`
+	Version Version `json:"version"`
 }
 type Metadata struct {
 	Name  string `json:"name"`
@@ -39,20 +43,12 @@ type Metadata struct {
 }
 type Output struct {
 	Metadata []Metadata `json:"metadata"`
-	Version  struct {
-		Ref string `json:"ref"`
-	} `json:"version"`
+	Version  Version    `json:"version"`
 }
 
 func main() {
 	var i Input
 	var o Output
-
-	baseDir := ""
-
-	if len(os.Args) > 1 {
-		baseDir = os.Args[1] + "/"
-	}
 
 	bytes, _ := ioutil.ReadAll(os.Stdin)
 	err := json.Unmarshal(bytes, &i)
@@ -76,12 +72,57 @@ func main() {
 	files = append(files, File{
 		FilePath:   i.Source.SecretsFile,
 		Passphrase: i.Source.SecretsPassphrase,
-		OutputName: baseDir + "secrets.yml",
+		OutputName: "secrets.yml",
 	})
 	files = append(files, File{
 		FilePath:   i.Source.BoshCert,
-		OutputName: baseDir + "boshCA.crt",
+		OutputName: "boshCA.crt",
 	})
+
+	// Check what the program name is and run the requested script
+	_, file := filepath.Split(os.Args[0])
+	switch file {
+	case "in":
+		RunIn(files, connection, &i, &o)
+		PrintOut(&o)
+	case "check":
+		v := RunCheck(files, connection, &i)
+		str := "[{\"ref\":\"" + strconv.Itoa(v) + "\"}]"
+		os.Stdout.Write([]byte(str))
+	}
+
+}
+
+// Run the `check` command
+func RunCheck(files []File, connection *s3.S3, i *Input) int {
+	headers := map[string][]string{}
+
+	timeLayout := "Mon, 02 Jan 2006 15:04:05 GMT"
+
+	lastDate := 0
+
+	// Loop through all the files
+	for _, f := range files {
+		bucket := connection.Bucket(i.Source.BucketName)
+
+		resp, _ := bucket.Head(f.FilePath, headers)
+		t, _ := time.Parse(timeLayout, resp.Header.Get("Last-Modified"))
+		if lastDate < int(t.Unix()) {
+			lastDate = int(t.Unix())
+		}
+	}
+
+	return lastDate
+}
+
+// Run the `in` command
+func RunIn(files []File, connection *s3.S3, i *Input, o *Output) {
+
+	baseDir := ""
+
+	if len(os.Args) > 1 {
+		baseDir = os.Args[1] + "/"
+	}
 
 	// Loop through all the files
 	for _, f := range files {
@@ -90,7 +131,6 @@ func main() {
 		data, err := GetFile(connection, i.Source.BucketName, f.FilePath)
 		if err != nil {
 			o.Metadata = append(o.Metadata, Metadata{"error", err.Error()})
-			PrintOut(&o)
 			return
 		}
 
@@ -99,19 +139,15 @@ func main() {
 			data, err = Decrypt(data, f.Passphrase)
 			if err != nil {
 				o.Metadata = append(o.Metadata, Metadata{"error", err.Error()})
-				PrintOut(&o)
 				return
 			}
 		}
 
 		// Write the file
-		ioutil.WriteFile(f.OutputName, data, 0644)
+		ioutil.WriteFile(baseDir+f.OutputName, data, 0644)
 	}
 	o.Metadata = append(o.Metadata, Metadata{"download", "complete"})
 	o.Metadata = append(o.Metadata, Metadata{"dir", baseDir})
-
-	PrintOut(&o)
-
 }
 
 func GetFile(conn *s3.S3, bucket_name string, path string) ([]byte, error) {
