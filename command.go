@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,6 +29,7 @@ type Source struct {
 	SecretsFile       string `json:"secrets_file"`
 	SecretsPassphrase string `json:"secrets_passphrase"`
 	BoshCert          string `json:"bosh_cert"`
+	Region            string `json:"region"`
 }
 
 type Version struct {
@@ -45,6 +47,8 @@ type Output struct {
 	Metadata []Metadata `json:"metadata"`
 	Version  Version    `json:"version"`
 }
+
+const defaultRegion = "us-east-1"
 
 func main() {
 	var i Input
@@ -65,7 +69,19 @@ func main() {
 		SecretKey: i.Source.SecretAccessKey,
 	}
 
-	connection := s3.New(auth, aws.USEast)
+	// use a default region of us east if one wasn't provided to be
+	// backwards compatible
+	if i.Source.Region == "" {
+		log.Print("No region specified, falling back to default region: " + defaultRegion)
+		i.Source.Region = defaultRegion
+	}
+
+	r, ok := aws.Regions[i.Source.Region]
+	if !ok {
+		log.Fatal(i.Source.Region + " is not valid.")
+	}
+
+	connection := s3.New(auth, r)
 
 	// Load the files in an array
 	var files []File
