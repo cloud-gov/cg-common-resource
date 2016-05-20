@@ -1,0 +1,26 @@
+---
+jobs:
+- name: push-cg-common-resource
+  plan:
+  - get: cg-common-resource
+    trigger: true
+  - task: compile
+    file: cg-common-resource/compile.yml
+  - put: docker-image-repo
+    params:
+      build: bin
+
+resources:
+- name: cg-common-resource
+  type: git
+  source:
+    uri: {{cg-common-resource-git-url}}
+    branch: {{cg-common-resource-git-branch}}
+
+- name: docker-image-repo
+  type: docker-image
+  source:
+    email: {{docker-email}}
+    username: {{docker-username}}
+    password: {{docker-password}}
+    repository: {{docker-repository}}
