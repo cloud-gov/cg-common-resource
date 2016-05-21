@@ -3,7 +3,9 @@
 # switch into this directory so go knows what to build
 cd $(dirname $0)
 
-GOOS=linux
+export GOOS=linux
+export GOARCH=386
+
 
 # get our dependencies, go will complain since we aren't in GOPATH
 # but whatever
