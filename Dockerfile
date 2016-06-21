@@ -1,4 +1,4 @@
-FROM gliderlabs/alpine
+FROM gliderlabs/alpine:latest
 
 RUN apk --no-cache --update add openssl ca-certificates
 
