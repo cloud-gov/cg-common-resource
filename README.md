@@ -1,5 +1,6 @@
 Cloud.gov Common Concourse Resource
 ===================================
+[![Code Climate](https://codeclimate.com/github/18F/cg-common-resource/badges/gpa.svg)](https://codeclimate.com/github/18F/cg-common-resource)
 
 Get common concourse files needed for most pipelines.
 
