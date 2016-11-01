@@ -1,6 +1,6 @@
 FROM gliderlabs/alpine:latest
 
-RUN apk --no-cache --update add openssl ca-certificates
+RUN apk --no-cache --update add ca-certificates
 
 ADD cg-common-resource /opt/resource/check
 ADD cg-common-resource /opt/resource/in
