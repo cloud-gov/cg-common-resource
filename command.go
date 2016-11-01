@@ -1,13 +1,15 @@
 package main
 
 import (
-	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/md5"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -48,7 +50,14 @@ type Output struct {
 	Version  Version    `json:"version"`
 }
 
+type _OpenSSLCreds struct {
+	key []byte
+	iv  []byte
+}
+
 const defaultRegion = "us-east-1"
+
+const openSSLSaltHeader = "Salted_" // OpenSSL salt is always this string + 8 bytes of actual salt
 
 func main() {
 	var i Input
@@ -152,7 +161,7 @@ func RunIn(files []File, connection *s3.S3, i *Input, o *Output) {
 
 		// If it is encrypt it, decrypt it
 		if f.Passphrase != "" {
-			data, err = Decrypt(data, f.Passphrase)
+			data, err = OpenSSLDecrypt(data, f.Passphrase)
 			if err != nil {
 				o.Metadata = append(o.Metadata, Metadata{"error", err.Error()})
 				return
@@ -173,43 +182,88 @@ func GetFile(conn *s3.S3, bucket_name string, path string) ([]byte, error) {
 	return data, err
 }
 
-func Decrypt(data []byte, passphrase string) ([]byte, error) {
-	cmd := exec.Command("openssl",
-		"enc",
-		"-aes-256-cbc",
-		"-d",
-		"-a",
-		"-pass",
-		"pass:"+passphrase,
-	)
-
-	stdin, err := cmd.StdinPipe()
+//OpenSSLDecrypt This OpenSSL AES-256-CBC decoding was taken from https://play.golang.org/p/r3VObSIB4o
+func OpenSSLDecrypt(data []byte, passphrase string) ([]byte, error) {
+	data, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		return []byte(""), err
+		return nil, err
 	}
-
-	stdout, err := cmd.StdoutPipe()
+	saltHeader := data[:aes.BlockSize]
+	if string(saltHeader[:7]) != openSSLSaltHeader {
+		return nil, fmt.Errorf("Does not appear to have been encrypted with OpenSSL, salt header missing.")
+	}
+	salt := saltHeader[8:]
+	creds, err := extractOpenSSLCreds([]byte(passphrase), salt)
 	if err != nil {
-		return []byte(""), err
+		return nil, err
 	}
+	return decrypt(creds.key, creds.iv, data)
+}
 
-	err = cmd.Start()
+func decrypt(key, iv, data []byte) ([]byte, error) {
+	if len(data) == 0 || len(data)%aes.BlockSize != 0 {
+		return nil, fmt.Errorf("bad blocksize(%v), aes.BlockSize = %v\n", len(data), aes.BlockSize)
+	}
+	c, err := aes.NewCipher(key)
 	if err != nil {
-		return []byte(""), err
+		return nil, err
 	}
-
-	_, err = stdin.Write(data)
-	if err != nil {
-		return []byte(""), err
+	cbc := cipher.NewCBCDecrypter(c, iv)
+	cbc.CryptBlocks(data[aes.BlockSize:], data[aes.BlockSize:])
+	out, err := pkcs7Unpad(data[aes.BlockSize:], aes.BlockSize)
+	if out == nil {
+		return nil, err
 	}
-	stdin.Close()
+	return out, nil
+}
 
-	buf := new(bytes.Buffer)
-	buf.ReadFrom(stdout)
+// openSSLEvpBytesToKey follows the OpenSSL (undocumented?) convention for extracting the key and IV from passphrase.
+// It uses the EVP_BytesToKey() method which is basically:
+// D_i = HASH^count(D_(i-1) || password || salt) where || denotes concatentaion, until there are sufficient bytes available
+// 48 bytes since we're expecting to handle AES-256, 32bytes for a key and 16bytes for the IV
+func extractOpenSSLCreds(password, salt []byte) (_OpenSSLCreds, error) {
+	m := make([]byte, 48)
+	prev := []byte{}
+	for i := 0; i < 3; i++ {
+		prev = hash(prev, password, salt)
+		copy(m[i*16:], prev)
+	}
+	return _OpenSSLCreds{key: m[:32], iv: m[32:]}, nil
+}
 
-	cmd.Wait()
+func hash(prev, password, salt []byte) []byte {
+	a := make([]byte, len(prev)+len(password)+len(salt))
+	copy(a, prev)
+	copy(a[len(prev):], password)
+	copy(a[len(prev)+len(password):], salt)
+	return md5sum(a)
+}
 
-	return buf.Bytes(), nil
+func md5sum(data []byte) []byte {
+	h := md5.New()
+	h.Write(data)
+	return h.Sum(nil)
+}
+
+// pkcs7Unpad returns slice of the original data without padding.
+func pkcs7Unpad(data []byte, blocklen int) ([]byte, error) {
+	if blocklen <= 0 {
+		return nil, fmt.Errorf("invalid blocklen %d", blocklen)
+	}
+	if len(data)%blocklen != 0 || len(data) == 0 {
+		return nil, fmt.Errorf("invalid data len %d", len(data))
+	}
+	padlen := int(data[len(data)-1])
+	if padlen > blocklen || padlen == 0 {
+		return nil, fmt.Errorf("invalid padding")
+	}
+	pad := data[len(data)-padlen:]
+	for i := 0; i < padlen; i++ {
+		if pad[i] != byte(padlen) {
+			return nil, fmt.Errorf("invalid padding")
+		}
+	}
+	return data[:len(data)-padlen], nil
 }
 
 func PrintOut(o *Output) {
