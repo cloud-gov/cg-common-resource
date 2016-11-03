@@ -73,9 +73,9 @@ func main() {
 
 	o.Version.Ref = i.Version.Ref
 
-	auth := aws.Auth{
-		AccessKey: i.Source.AccessKeyId,
-		SecretKey: i.Source.SecretAccessKey,
+	auth, err := aws.GetAuth(i.Source.AccessKeyId, i.Source.SecretAccessKey, "", time.Time{})
+	if err != nil {
+		log.Fatalf("Authentication error: %s", err.Error())
 	}
 
 	// use a default region of us east if one wasn't provided to be
