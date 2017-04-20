@@ -29,6 +29,7 @@ type Source struct {
 	AccessKeyId       string `json:"access_key_id"`
 	SecretAccessKey   string `json:"secret_access_key"`
 	SecretsFile       string `json:"secrets_file"`
+	SecretsFiles      []string  `json:"secrets_files"`
 	SecretsPassphrase string `json:"secrets_passphrase"`
 	BoshCert          string `json:"bosh_cert"`
 	Region            string `json:"region"`
@@ -94,11 +95,20 @@ func main() {
 
 	// Load the files in an array
 	var files []File
-	files = append(files, File{
-		FilePath:   i.Source.SecretsFile,
-		Passphrase: i.Source.SecretsPassphrase,
-		OutputName: "secrets.yml",
-	})
+	if i.Source.SecretsFile != "" {
+		files = append(files, File{
+			FilePath:   i.Source.SecretsFile,
+			Passphrase: i.Source.SecretsPassphrase,
+			OutputName: "secrets.yml",
+		})
+	}
+	for _, f := range i.Source.SecretsFiles {
+		files = append(files, File{
+			FilePath:   f,
+			Passphrase: i.Source.SecretsPassphrase,
+			OutputName: "decrypted-" + f,
+		})
+	}
 	files = append(files, File{
 		FilePath:   i.Source.BoshCert,
 		OutputName: "boshCA.crt",
